@@ -11,9 +11,30 @@
 #include "utils/stl_extra.h"
 #include "utils/urlencode.h"
 #include "webserver.h"
+//add
+#include <array>
+#include <sys/stat.h>
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
+#ifndef LOG_LEVEL
+#define LOG_LEVEL LOG_LEVEL_INFO
+#endif
 #define LOG_IF_LEVEL(level, msg) \
     do { if (LOG_LEVEL >= level) writeLog(0, msg, level); } while(0)
 
+static bool isDirectory(const std::string &path) {
+#ifdef _WIN32
+    DWORD attr = GetFileAttributesA(path.c_str());
+    return (attr != INVALID_FILE_ATTRIBUTES) && (attr & FILE_ATTRIBUTE_DIRECTORY);
+#else
+    struct stat statbuf;
+    if (stat(path.c_str(), &statbuf) != 0)
+        return false;
+    return S_ISDIR(statbuf.st_mode);
+#endif
+}
 static const char *request_header_blacklist[] = {"host", "accept", "accept-encoding"};
 
 static inline bool is_request_header_blacklisted(const std::string &header)
@@ -33,108 +54,100 @@ void WebServer::stop_web_server()
     SERVER_EXIT_FLAG = true;
 }
 
-static bool isValidIP(std::string_view ip)
+static bool isValidIP(const std::string &ip)
 {
     sockaddr_in sa4{};
     sockaddr_in6 sa6{};
-    std::string tmp(ip);
-    return inet_pton(AF_INET, tmp.c_str(), &sa4.sin_addr) == 1 || inet_pton(AF_INET6, tmp.c_str(), &sa6.sin6_addr) == 1;
+    return inet_pton(AF_INET, ip.c_str(), &sa4.sin_addr) == 1 || inet_pton(AF_INET6, ip.c_str(), &sa6.sin6_addr) == 1;
 }
 
-static std::optional<std::string> extractFirstIP(std::string_view hdr)
+
+static std::string extractFirstIP(const std::string &hdr, bool &found)
 {
     size_t pos = 0;
-    while (pos < hdr.size())
-    {
+    found = false;
+    while (pos < hdr.length()) {
         size_t comma = hdr.find(',', pos);
-        auto token = hdr.substr(pos, (comma == std::string_view::npos ? hdr.size() : comma) - pos);
+        auto token = hdr.substr(pos, (comma == std::string::npos ? hdr.size() : comma) - pos);
         size_t b = token.find_first_not_of(" \t\r\n\"");
         size_t e = token.find_last_not_of(" \t\r\n\"");
-        if (b != std::string_view::npos && e != std::string_view::npos)
-        {
+        if (b != std::string::npos && e != std::string::npos) {
             auto ip = token.substr(b, e - b + 1);
-
-            if (ip.front() == '[' && ip.back() == ']')
-            {
-                ip.remove_prefix(1);
-                ip.remove_suffix(1);
+            if (ip.length() > 2 && ip[0] == '[' && ip[ip.length() - 1] == ']') {
+                ip = ip.substr(1, ip.length() - 2);
             }
-
-            if (isValidIP(ip))
-            {
-                return std::string(ip);
+            if (isValidIP(ip)) {
+                found = true;
+                return ip;
             }
         }
-        if (comma == std::string_view::npos)
-            break;
+        if (comma == std::string::npos) break;
         pos = comma + 1;
     }
-    return std::nullopt;
+    return "";
 }
+
 
 static std::string getClientRealIP(const httplib::Request &req)
 {
-    static constexpr std::array<std::array<std::string_view, 3>, 3> header_groups{{
-        {"CF-Connecting-IP", "True-Client-IP", "Fastly-Client-IP"},
-        {"X-Cluster-Client-IP", "X-Real-IP", "X-Forwarded-For"},
-        {"X-Client-IP", "X-Originating-IP", "Forwarded"}
-    }};
+    const char* header_groups[3][3] = {
+        { "CF-Connecting-IP", "True-Client-IP", "Fastly-Client-IP" },
+        { "X-Cluster-Client-IP", "X-Real-IP", "X-Forwarded-For" },
+        { "X-Client-IP", "X-Originating-IP", "Forwarded" }
+    };
 
-    for (const auto &group : header_groups)
-    {
-        for (auto hv : group)
-        {
+    for (int i = 0; i < 3; ++i) {
+        for (int j = 0; j < 3; ++j) {
+            const char* hv = header_groups[i][j];
             if (!req.has_header(hv))
                 continue;
-            auto val = req.get_header_value(hv);
 
-            if (hv == "Forwarded")
-            {
-                std::string_view remaining = val;
+            std::string val = req.get_header_value(hv);
 
-                while (!remaining.empty())
-                {
-                    auto for_pos = remaining.find("for=");
-                    if (for_pos == std::string_view::npos)
+            if (hv == "Forwarded") {
+                std::string remaining = val;
+
+                while (!remaining.empty()) {
+                    size_t for_pos = remaining.find("for=");
+                    if (for_pos == std::string::npos)
                         break;
 
-                    remaining.remove_prefix(for_pos + 4);
+                    remaining = remaining.substr(for_pos + 4);
 
                     bool quoted = false;
-                    if (!remaining.empty() && remaining.front() == '"')
-                    {
+                    if (!remaining.empty() && remaining[0] == '"') {
                         quoted = true;
-                        remaining.remove_prefix(1);
-                    }
-                    auto end = remaining.find_first_of(quoted ? "\"" : ";,");
-                    auto ip_part = remaining.substr(0, end);
-
-                    if (ip_part.size() >= 2 && ip_part.front() == '[' && ip_part.back() == ']')
-                    {
-                        ip_part.remove_prefix(1);
-                        ip_part.remove_suffix(1);
+                        remaining = remaining.substr(1);
                     }
 
-                    if (isValidIP(ip_part))
-                    {
-                        return std::string(ip_part);
+                    size_t end = remaining.find_first_of(quoted ? "\"" : ";,");
+                    std::string ip_part = remaining.substr(0, end);
+
+                    if (ip_part.length() > 2 && ip_part[0] == '[' && ip_part[ip_part.length() - 1] == ']') {
+                        ip_part = ip_part.substr(1, ip_part.length() - 2);
                     }
 
-                    if (end == std::string_view::npos)
+                    if (isValidIP(ip_part)) {
+                        return ip_part;
+                    }
+
+                    if (end == std::string::npos)
                         break;
-                    remaining.remove_prefix(end + (quoted ? 1 : 0));
+                    remaining = remaining.substr(end + (quoted ? 1 : 0));
                 }
             }
 
-            if (auto ip = extractFirstIP(val); ip.has_value())
-            {
-                return *ip;
+            bool found = false;
+            std::string ip = extractFirstIP(val, found);
+            if (found) {
+                return ip;
             }
         }
     }
 
     return req.remote_addr;
 }
+
 
 static httplib::Server::Handler makeHandler(const responseRoute &rr)
 {
@@ -341,7 +354,7 @@ int WebServer::start_web_server_multi(listener_args *args)
         {
             res.status = 500;
         } });
-    if (serve_file && std::filesystem::is_directory(serve_file_root))
+    if (serve_file && isDirectory(serve_file_root))
     {
         server.set_mount_point("/", serve_file_root);
     }
