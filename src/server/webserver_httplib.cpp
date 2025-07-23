@@ -57,15 +57,16 @@ static bool isValidIP(const std::string &ip)
 {
     if (ip.empty() || ip.length() > 45) return false;
     
+    // 检查是否包含IPv6特征字符
     bool hasColon = ip.find(':') != std::string::npos;
     
-    sockaddr_storage ss{};
-    int family = hasColon ? AF_INET6 : AF_INET;
-    
-    return inet_pton(family, ip.c_str(), 
-        family == AF_INET6 ? 
-        &reinterpret_cast<sockaddr_in6*>(&ss)->sin6_addr : 
-        &reinterpret_cast<sockaddr_in*>(&ss)->sin_addr) == 1;
+    if (hasColon) {
+        sockaddr_in6 sa6{};
+        return inet_pton(AF_INET6, ip.c_str(), &sa6.sin6_addr) == 1;
+    } else {
+        sockaddr_in sa4{};
+        return inet_pton(AF_INET, ip.c_str(), &sa4.sin_addr) == 1;
+    }
 }
 
 static std::string extractFirstIP(const std::string &hdr, bool &found)
@@ -171,7 +172,7 @@ static std::string getClientRealIP(const httplib::Request &req)
     return req.remote_addr;
 }
 
-static std::string trim(const std::string& str) {
+static std::string trimWhitespace(const std::string& str) {
     size_t first = str.find_first_not_of(" \t\r\n");
     if (first == std::string::npos) return "";
     size_t last = str.find_last_not_of(" \t\r\n");
@@ -186,7 +187,7 @@ static std::string limitXFFIPs(const std::string& xff, const std::string& newIP,
     while (pos < xff.length()) {
         size_t comma = xff.find(',', pos);
         std::string ip = xff.substr(pos, comma == std::string::npos ? xff.length() - pos : comma - pos);
-        ip = trim(ip);
+        ip = trimWhitespace(ip);
         
         if (!ip.empty()) {
             std::string lower_ip = ip;
@@ -231,6 +232,7 @@ static httplib::Server::Handler makeHandler(const responseRoute &rr)
     return [rr](const httplib::Request &request, httplib::Response &response)
     {
         Request req;
+        Response resp;
         req.method = request.method;
         req.url = request.path;
         auto real_ip = getClientRealIP(request);
