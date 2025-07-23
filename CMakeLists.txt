@@ -89,13 +89,13 @@ target_link_directories(${BUILD_TARGET_NAME} PRIVATE ${CMAKE_SOURCE_DIR})
 # Threads
 set(THREADS_PREFER_PTHREAD_FLAG ON)
 find_package(Threads REQUIRED)
-target_link_libraries(${BUILD_TARGET_NAME} ${CMAKE_THREAD_LIBS_INIT})
+target_link_libraries(${BUILD_TARGET_NAME} PRIVATE ${CMAKE_THREAD_LIBS_INIT})
 
 # CURL
 find_package(CURL 7.54.0 REQUIRED)
 target_include_directories(${BUILD_TARGET_NAME} PRIVATE ${CURL_INCLUDE_DIRS})
 target_link_directories(${BUILD_TARGET_NAME} PRIVATE ${CURL_LIBRARY_DIRS})
-target_link_libraries(${BUILD_TARGET_NAME} CURL::libcurl)
+target_link_libraries(${BUILD_TARGET_NAME} PRIVATE CURL::libcurl)
 target_compile_definitions(${BUILD_TARGET_NAME} PRIVATE -DCURL_STATICLIB)
 
 # RapidJSON
@@ -112,26 +112,26 @@ pkg_check_modules(YAML_CPP yaml-cpp>=0.6.3 REQUIRED)
 find_library(YAML_CPP_LIBRARY NAMES yaml-cpp yaml-cppd PATHS ${YAML_CPP_LIBRARY_DIRS})
 target_include_directories(${BUILD_TARGET_NAME} PRIVATE ${YAML_CPP_INCLUDE_DIRS})
 target_link_directories(${BUILD_TARGET_NAME} PRIVATE ${YAML_CPP_LIBRARY_DIRS})
-target_link_libraries(${BUILD_TARGET_NAME} ${YAML_CPP_LIBRARY})
+target_link_libraries(${BUILD_TARGET_NAME} PRIVATE ${YAML_CPP_LIBRARY})
 target_compile_definitions(${BUILD_TARGET_NAME} PRIVATE -DYAML_CPP_STATIC_DEFINE)
 
 # PCRE2
 find_package(PCRE2 REQUIRED)
 target_include_directories(${BUILD_TARGET_NAME} PRIVATE ${PCRE2_INCLUDE_DIRS})
-target_link_libraries(${BUILD_TARGET_NAME} ${PCRE2_LIBRARY})
+target_link_libraries(${BUILD_TARGET_NAME} PRIVATE ${PCRE2_LIBRARY})
 target_compile_definitions(${BUILD_TARGET_NAME} PRIVATE -DPCRE2_STATIC)
 
 # QuickJS
 if(NOT BUILD_STATIC_LIBRARY)
     find_package(QuickJS REQUIRED)
     target_include_directories(${BUILD_TARGET_NAME} PRIVATE ${QUICKJS_INCLUDE_DIRS})
-    target_link_libraries(${BUILD_TARGET_NAME} ${QUICKJS_LIBRARIES})
+    target_link_libraries(${BUILD_TARGET_NAME} PRIVATE ${QUICKJS_LIBRARIES})
 endif()
 
 # LibCron
 find_package(LibCron REQUIRED)
 target_include_directories(${BUILD_TARGET_NAME} PRIVATE ${LIBCRON_INCLUDE_DIRS})
-target_link_libraries(${BUILD_TARGET_NAME} ${LIBCRON_LIBRARIES})
+target_link_libraries(${BUILD_TARGET_NAME} PRIVATE ${LIBCRON_LIBRARIES})
 
 # Platform-specific
 if(WIN32)
