@@ -284,7 +284,7 @@ int main(int argc, char *argv[])
 
         webServer.append_response("GET", "/getlocal", "text/plain;charset=utf-8", [](RESPONSE_CALLBACK_ARGS) -> std::string
         {
-            return fileGet(urlDecode(getUrlArg(request.argument, "path")));
+            return fileGet(urlDecode(getUrlArg(request.argument, "path")),true);
         });
     }
 
