@@ -11,7 +11,6 @@
 #include "utils/stl_extra.h"
 #include "utils/urlencode.h"
 #include "webserver.h"
-//add
 #include <array>
 #include <sys/stat.h>
 #ifdef _WIN32
@@ -56,91 +55,115 @@ void WebServer::stop_web_server()
 
 static bool isValidIP(const std::string &ip)
 {
-    sockaddr_in sa4{};
-    sockaddr_in6 sa6{};
-    return inet_pton(AF_INET, ip.c_str(), &sa4.sin_addr) == 1 || inet_pton(AF_INET6, ip.c_str(), &sa6.sin6_addr) == 1;
+    if (ip.empty() || ip.length() > 45) return false;
+    
+    bool hasColon = ip.find(':') != std::string::npos;
+    
+    sockaddr_storage ss{};
+    int family = hasColon ? AF_INET6 : AF_INET;
+    
+    return inet_pton(family, ip.c_str(), 
+        family == AF_INET6 ? 
+        &reinterpret_cast<sockaddr_in6*>(&ss)->sin6_addr : 
+        &reinterpret_cast<sockaddr_in*>(&ss)->sin_addr) == 1;
 }
-
 
 static std::string extractFirstIP(const std::string &hdr, bool &found)
 {
-    size_t pos = 0;
     found = false;
-    while (pos < hdr.length()) {
-        size_t comma = hdr.find(',', pos);
-        auto token = hdr.substr(pos, (comma == std::string::npos ? hdr.size() : comma) - pos);
-        size_t b = token.find_first_not_of(" \t\r\n\"");
-        size_t e = token.find_last_not_of(" \t\r\n\"");
-        if (b != std::string::npos && e != std::string::npos) {
-            auto ip = token.substr(b, e - b + 1);
-            if (ip.length() > 2 && ip[0] == '[' && ip[ip.length() - 1] == ']') {
-                ip = ip.substr(1, ip.length() - 2);
-            }
-            if (isValidIP(ip)) {
-                found = true;
-                return ip;
-            }
+    size_t start = 0;
+    
+    start = hdr.find_first_not_of(" \t\r\n,");
+    if (start == std::string::npos) return "";
+    
+    size_t end = 0;
+    
+    while (start < hdr.length()) {
+        end = hdr.find_first_of(",", start);
+        if (end == std::string::npos) end = hdr.length();
+        
+        std::string candidate = hdr.substr(start, end - start);
+        candidate.erase(0, candidate.find_first_not_of(" \t\r\n\""));
+        candidate.erase(candidate.find_last_not_of(" \t\r\n\"") + 1);
+        
+        if (!candidate.empty() && candidate.front() == '[' && candidate.back() == ']') {
+            candidate = candidate.substr(1, candidate.length() - 2);
         }
-        if (comma == std::string::npos) break;
-        pos = comma + 1;
+        
+        if (isValidIP(candidate)) {
+            found = true;
+            return candidate;
+        }
+        
+        start = hdr.find_first_not_of(" \t\r\n,", end + 1);
+        if (start == std::string::npos) break;
     }
+    
     return "";
 }
 
-
 static std::string getClientRealIP(const httplib::Request &req)
 {
-    const char* header_groups[3][3] = {
-        { "CF-Connecting-IP", "True-Client-IP", "Fastly-Client-IP" },
-        { "X-Cluster-Client-IP", "X-Real-IP", "X-Forwarded-For" },
+    const std::vector<std::vector<std::string>> headerGroups = {
+        { "CF-Connecting-IP", "Fly-Client-IP", "True-Client-IP", "Fastly-Client-IP", 
+          "CDN-Connecting-IP", "Cdn-Src-Ip", "Tencent-Client-IP", "Ali-CDN-Real-IP",
+          "AWS-Client-IP", "Azure-ClientIP", "X-Cloudinary-Real-IP", "X-EC-Client-IP",
+          "X-KeysCDN-Connecting-IP", "X-Sucuri-ClientIP", "Cdn-Real-Ip", "X-Cache-Client-IP",
+          "X-Kakao-Real-IP", "CDN-Client-IP" },
+        { "X-Forwarded-For", "X-Cluster-Client-IP", "X-Real-IP", "X-Forwarded-For-Tencent", "X-Real-IP-Alibabacloud" },
         { "X-Client-IP", "X-Originating-IP", "Forwarded" }
     };
 
-    for (int i = 0; i < 3; ++i) {
-        for (int j = 0; j < 3; ++j) {
-            const char* hv = header_groups[i][j];
-            if (!req.has_header(hv))
+    for (const auto& group : headerGroups) {
+        for (const auto& header : group) {
+            if (!req.has_header(header.c_str()))
                 continue;
 
-            std::string val = req.get_header_value(hv);
+            std::string value = req.get_header_value(header.c_str());
 
-            if (hv == "Forwarded") {
-                std::string remaining = val;
+            if (header == "Forwarded") {
+                size_t pos = 0;
+                while (pos < value.size()) {
+                    size_t forPos = value.find("for=", pos);
+                    if (forPos == std::string::npos) break;
+                    forPos += 4;
 
-                while (!remaining.empty()) {
-                    size_t for_pos = remaining.find("for=");
-                    if (for_pos == std::string::npos)
-                        break;
+                    bool isQuoted = (forPos < value.size() && value[forPos] == '"');
+                    if (isQuoted) ++forPos;
 
-                    remaining = remaining.substr(for_pos + 4);
+                    size_t endPos = value.find(isQuoted ? '"' : ';', forPos);
+                    if (endPos == std::string::npos) endPos = value.size();
 
-                    bool quoted = false;
-                    if (!remaining.empty() && remaining[0] == '"') {
-                        quoted = true;
-                        remaining = remaining.substr(1);
+                    std::string ipCandidate = value.substr(forPos, endPos - forPos);
+                    
+                    // 移除IPv6方括号
+                    if (!ipCandidate.empty() && ipCandidate.front() == '[' && ipCandidate.back() == ']') {
+                        ipCandidate = ipCandidate.substr(1, ipCandidate.size() - 2);
                     }
 
-                    size_t end = remaining.find_first_of(quoted ? "\"" : ";,");
-                    std::string ip_part = remaining.substr(0, end);
+                    if (isValidIP(ipCandidate))
+                        return ipCandidate;
 
-                    if (ip_part.length() > 2 && ip_part[0] == '[' && ip_part[ip_part.length() - 1] == ']') {
-                        ip_part = ip_part.substr(1, ip_part.length() - 2);
-                    }
-
-                    if (isValidIP(ip_part)) {
-                        return ip_part;
-                    }
-
-                    if (end == std::string::npos)
-                        break;
-                    remaining = remaining.substr(end + (quoted ? 1 : 0));
+                    pos = endPos + (isQuoted ? 1 : 0);
                 }
             }
-
-            bool found = false;
-            std::string ip = extractFirstIP(val, found);
-            if (found) {
-                return ip;
+            else if (header == "X-Forwarded-For" || header == "X-Forwarded-For-Tencent") {
+                size_t commaPos = value.find(',');
+                std::string firstIp = commaPos != std::string::npos 
+                    ? value.substr(0, commaPos) 
+                    : value;
+                
+                firstIp.erase(0, firstIp.find_first_not_of(" \t"));
+                firstIp.erase(firstIp.find_last_not_of(" \t") + 1);
+                
+                if (isValidIP(firstIp))
+                    return firstIp;
+            }
+            else {
+                bool found = false;
+                std::string ip = extractFirstIP(value, found);
+                if (found && isValidIP(ip))
+                    return ip;
             }
         }
     }
@@ -148,13 +171,66 @@ static std::string getClientRealIP(const httplib::Request &req)
     return req.remote_addr;
 }
 
+static std::string trim(const std::string& str) {
+    size_t first = str.find_first_not_of(" \t\r\n");
+    if (first == std::string::npos) return "";
+    size_t last = str.find_last_not_of(" \t\r\n");
+    return str.substr(first, last - first + 1);
+}
+
+static std::string limitXFFIPs(const std::string& xff, const std::string& newIP, size_t maxIPs = 4) {
+    std::vector<std::string> ips;
+    ips.push_back(newIP);
+    
+    size_t pos = 0;
+    while (pos < xff.length()) {
+        size_t comma = xff.find(',', pos);
+        std::string ip = xff.substr(pos, comma == std::string::npos ? xff.length() - pos : comma - pos);
+        ip = trim(ip);
+        
+        if (!ip.empty()) {
+            std::string lower_ip = ip;
+            std::transform(lower_ip.begin(), lower_ip.end(), lower_ip.begin(), ::tolower);
+            
+            bool isDuplicate = false;
+            for (const auto& existing : ips) {
+                std::string lower_existing = existing;
+                std::transform(lower_existing.begin(), lower_existing.end(), lower_existing.begin(), ::tolower);
+                if (lower_existing == lower_ip) {
+                    isDuplicate = true;
+                    break;
+                }
+            }
+            
+            if (!isDuplicate) {
+                ips.push_back(ip);
+            }
+        }
+        
+        if (comma == std::string::npos) break;
+        pos = comma + 1;
+    }
+    
+    if (ips.size() > maxIPs) {
+        ips.erase(ips.begin() + maxIPs, ips.end());
+    }
+    
+    std::string result;
+    for (size_t i = 0; i < ips.size(); ++i) {
+        result += ips[i];
+        if (i < ips.size() - 1) {
+            result += ", ";
+        }
+    }
+    
+    return result;
+}
 
 static httplib::Server::Handler makeHandler(const responseRoute &rr)
 {
     return [rr](const httplib::Request &request, httplib::Response &response)
     {
         Request req;
-        Response resp;
         req.method = request.method;
         req.url = request.path;
         auto real_ip = getClientRealIP(request);
@@ -166,26 +242,14 @@ static httplib::Server::Handler makeHandler(const responseRoute &rr)
             }
             req.headers.emplace(h.first.data(), h.second.data());
         }
+        
+        auto& headers = req.headers;
+        const std::string existing_xff = trim(headers["X-Forwarded-For"]);
+        headers["X-Client-IP"] = real_ip;
+        headers["X-Forwarded-For"] = limitXFFIPs(existing_xff, real_ip, 4);
+        headers["X-Real-IP"] = real_ip;
+        headers["FFQ-Connecting-IP"] = real_ip;
 
-        auto existing_xff = trim(request.get_header_value("X-Forwarded-For"));
-        auto &xff = req.headers["X-Forwarded-For"];
-        if (!existing_xff.empty())
-        {
-            if (existing_xff.find(real_ip) == std::string::npos)
-            {
-                xff = real_ip + ", " + existing_xff;
-            }
-            else
-            {
-                xff = existing_xff;
-            }
-        }
-        else
-        {
-            xff = real_ip;
-        }
-        req.headers["X-Real-IP"] = real_ip;
-        req.headers["MiaoKo-Connecting-IP"] = real_ip;
         req.argument = request.params;
         const auto &ct = request.get_header_value("Content-Type");
         if (request.method == "POST" || request.method == "PUT" || request.method == "PATCH")
@@ -304,7 +368,6 @@ int WebServer::start_web_server_multi(listener_args *args)
                 return httplib::Server::HandlerResponse::Handled;
             }
         }
-        res.set_header("X-Client-IP", req.remote_addr);
         if (req.has_header("Access-Control-Request-Headers"))
         {
             res.set_header("Access-Control-Allow-Headers", req.get_header_value("Access-Control-Request-Headers"));
