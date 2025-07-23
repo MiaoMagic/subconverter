@@ -80,9 +80,9 @@ bool fileExist(const std::string& path, bool scope_limit)
 }
 
 // Copy contents from one file to another
-bool fileCopy(const std::string& source, const std::string& dest, bool scope_limit)
+bool fileCopy(const std::string &source, const std::string &dest)
 {
-    if (scope_limit && (!isInScope(source) || !isInScope(dest)))
+    if ((!isInScope(source) || !isInScope(dest)))
         return false;
 
     std::ifstream infile(source, std::ios::binary);
@@ -103,9 +103,9 @@ bool fileCopy(const std::string& source, const std::string& dest, bool scope_lim
 }
 
 // Write content to a file (overwrite or append mode)
-int fileWrite(const std::string& path, const std::string& content, bool overwrite, bool scope_limit)
+int fileWrite(const std::string &path, const std::string &content, bool overwrite)
 {
-    if (scope_limit && !isInScope(path))
+    if ( !isInScope(path))
         return -1;
 
     std::ios_base::openmode mode = std::ios::binary | (overwrite ? std::ios::trunc : std::ios::app);
