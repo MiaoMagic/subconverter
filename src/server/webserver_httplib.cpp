@@ -12,6 +12,7 @@
 #include "utils/urlencode.h"
 #include "webserver.h"
 #include <array>
+#include <algorithm>
 #include <sys/stat.h>
 #ifdef _WIN32
 #include <windows.h>
@@ -73,33 +74,32 @@ static std::string extractFirstIP(const std::string &hdr, bool &found)
 {
     found = false;
     size_t start = 0;
-    
+
     start = hdr.find_first_not_of(" \t\r\n,");
     if (start == std::string::npos) return "";
-    
+
     size_t end = 0;
-    
+
     while (start < hdr.length()) {
         end = hdr.find_first_of(",", start);
         if (end == std::string::npos) end = hdr.length();
-        
+
         std::string candidate = hdr.substr(start, end - start);
-        candidate.erase(0, candidate.find_first_not_of(" \t\r\n\""));
-        candidate.erase(candidate.find_last_not_of(" \t\r\n\"") + 1);
-        
+        candidate = trimWhitespace(candidate,true,true);
+
         if (!candidate.empty() && candidate.front() == '[' && candidate.back() == ']') {
             candidate = candidate.substr(1, candidate.length() - 2);
         }
-        
+
         if (isValidIP(candidate)) {
             found = true;
             return candidate;
         }
-        
+
         start = hdr.find_first_not_of(" \t\r\n,", end + 1);
         if (start == std::string::npos) break;
     }
-    
+
     return "";
 }
 
@@ -172,13 +172,6 @@ static std::string getClientRealIP(const httplib::Request &req)
     return req.remote_addr;
 }
 
-static std::string trimIPWhitespace(const std::string& str) {
-    size_t first = str.find_first_not_of(" \t\r\n");
-    if (first == std::string::npos) return "";
-    size_t last = str.find_last_not_of(" \t\r\n");
-    return str.substr(first, last - first + 1);
-}
-
 static std::string limitXFFIPs(const std::string& xff, const std::string& newIP, size_t maxIPs = 4) {
     std::vector<std::string> ips;
     ips.push_back(newIP);
@@ -187,7 +180,7 @@ static std::string limitXFFIPs(const std::string& xff, const std::string& newIP,
     while (pos < xff.length()) {
         size_t comma = xff.find(',', pos);
         std::string ip = xff.substr(pos, comma == std::string::npos ? xff.length() - pos : comma - pos);
-        ip = trimIPWhitespace(ip);
+        ip = trimWhitespace(ip, true, true);
         
         if (!ip.empty()) {
             std::string lower_ip = ip;
@@ -246,7 +239,7 @@ static httplib::Server::Handler makeHandler(const responseRoute &rr)
         }
         
         auto& headers = req.headers;
-        const std::string existing_xff = trim(headers["X-Forwarded-For"]);
+        const std::string existing_xff = trimWhitespace(headers["X-Forwarded-For"],true, true);
         headers["X-Client-IP"] = real_ip;
         headers["X-Forwarded-For"] = limitXFFIPs(existing_xff, real_ip, 4);
         headers["X-Real-IP"] = real_ip;
