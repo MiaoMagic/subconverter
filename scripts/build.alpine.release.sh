@@ -18,6 +18,7 @@ cd ..
 
 git clone https://github.com/ftk/quickjspp --depth=1
 cd quickjspp
+git checkout 681988e
 cmake -DCMAKE_BUILD_TYPE=Release .
 make quickjs -j3 > /dev/null
 install -d /usr/lib/quickjs/
