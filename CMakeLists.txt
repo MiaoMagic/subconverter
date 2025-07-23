@@ -17,7 +17,7 @@ else()
 endif()
 
 # ----------------- Options -----------------
-option(FILE_READ_UNSAFE "Disable path scope safety (allow reading outside config/rules)" OFF)
+option(FILE_READ_SAFE "Enable safe file access (restrict to subdirectories)" OFF)
 option(USING_MALLOC_TRIM "Call malloc_trim after processing request to lower memory usage" OFF)
 option(BUILD_STATIC_LIBRARY "Build a static library containing only the essential part." OFF)
 
@@ -70,7 +70,9 @@ else()
 endif()
 
 # ----------------- Definitions -----------------
-if(FILE_READ_UNSAFE)
+if(FILE_READ_SAFE)
+    target_compile_definitions(${BUILD_TARGET_NAME} PRIVATE -DFILE_READ_SAFE)
+else()
     target_compile_definitions(${BUILD_TARGET_NAME} PRIVATE -DFILE_READ_UNSAFE)
 endif()
 
