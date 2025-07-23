@@ -135,7 +135,7 @@ target_link_libraries(${BUILD_TARGET_NAME} PRIVATE ${LIBCRON_LIBRARIES})
 
 # Platform-specific
 if(WIN32)
-    target_link_libraries(${BUILD_TARGET_NAME} PRIVATE ws2_32 wsock32)
+    target_link_libraries(${BUILD_TARGET_NAME} PRIVATE ws2_32 wsock32 shlwapi)
 else()
     include(GNUInstallDirs)
     install(TARGETS ${BUILD_TARGET_NAME} DESTINATION ${CMAKE_INSTALL_BINDIR}/${BUILD_TARGET_NAME})
