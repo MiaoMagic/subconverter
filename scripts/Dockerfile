@@ -10,7 +10,6 @@ RUN set -xe && \
     apk add --no-cache --virtual .build-deps curl-dev rapidjson-dev pcre2-dev yaml-cpp-dev && \
     git clone https://github.com/ftk/quickjspp && \
     cd quickjspp && \
-    git checkout 681988e && \
     git submodule update --init && \
     cmake -DCMAKE_BUILD_TYPE=Release . && \
     make quickjs -j $THREADS && \
