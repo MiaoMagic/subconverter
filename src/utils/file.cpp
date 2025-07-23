@@ -44,20 +44,20 @@ static bool isInScope(const std::string& path)
     return matchPath(real_target, allowed1) || matchPath(real_target, allowed2);
 #else
 #ifdef _WIN32
-    if(path.find(":\\") != path.npos || path.find("..") != path.npos)
+    if (path.find(":\\") != path.npos || path.find("..") != path.npos)
         return false;
 #else
-    if(startsWith(path, "/") || path.find("..") != path.npos)
+    if (startsWith(path, "/") || path.find("..") != path.npos)
         return false;
-#endif // _WIN32
+#endif
     return true;
 #endif
 }
 
 // Read the content of a file as string
-std::string fileGet(const std::string& path)
+std::string fileGet(const std::string& path, bool scope_limit)
 {
-    if (!isInScope(path))
+    if (scope_limit && !isInScope(path))
         return "";
 
     std::ifstream infile(path, std::ios::binary);
@@ -70,9 +70,9 @@ std::string fileGet(const std::string& path)
 }
 
 // Check if a file exists and is a regular file
-bool fileExist(const std::string& path)
+bool fileExist(const std::string& path, bool scope_limit)
 {
-    if (!isInScope(path))
+    if (scope_limit && !isInScope(path))
         return false;
 
     struct stat st;
@@ -80,9 +80,9 @@ bool fileExist(const std::string& path)
 }
 
 // Copy contents from one file to another
-bool fileCopy(const std::string& source, const std::string& dest)
+bool fileCopy(const std::string& source, const std::string& dest, bool scope_limit)
 {
-    if (!isInScope(source) || !isInScope(dest))
+    if (scope_limit && (!isInScope(source) || !isInScope(dest)))
         return false;
 
     std::ifstream infile(source, std::ios::binary);
@@ -103,9 +103,9 @@ bool fileCopy(const std::string& source, const std::string& dest)
 }
 
 // Write content to a file (overwrite or append mode)
-int fileWrite(const std::string& path, const std::string& content, bool overwrite)
+int fileWrite(const std::string& path, const std::string& content, bool overwrite, bool scope_limit)
 {
-    if (!isInScope(path))
+    if (scope_limit && !isInScope(path))
         return -1;
 
     std::ios_base::openmode mode = std::ios::binary | (overwrite ? std::ios::trunc : std::ios::app);
