@@ -1,11 +1,48 @@
 #include <string>
 #include <fstream>
+#include <sstream>
 #include <sys/stat.h>
+#include <cstdio>
+#include <cstdlib>
+#include <limits.h>
+#include <unistd.h>
 
 #include "utils/string.h"
 
-bool isInScope(const std::string &path)
+// Enable file access safety by default.
+// Define FILE_READ_UNSAFE to disable path restrictions.
+#ifndef FILE_READ_UNSAFE
+#define FILE_READ_SAFE
+#pragma message("FILE_READ_SAFE is enabled: access is limited to ./config and ./rules")
+#else
+#pragma message("FILE_READ_UNSAFE is enabled: access is NOT restricted")
+#endif
+
+// Check if a given path is within ./config or ./rules (only when FILE_READ_SAFE is defined)
+static bool isInScope(const std::string& path)
 {
+#ifdef FILE_READ_SAFE
+    char real_target[PATH_MAX];
+    if (!realpath(path.c_str(), real_target)) {
+        return false;
+    }
+
+    char cwd[PATH_MAX];
+    if (!getcwd(cwd, sizeof(cwd))) {
+        return false;
+    }
+
+    std::string allowed1 = std::string(cwd) + "/config";
+    std::string allowed2 = std::string(cwd) + "/rules";
+
+    auto matchPath = [](const char* target, const std::string& base) {
+        size_t len = base.length();
+        return strncmp(target, base.c_str(), len) == 0 &&
+               (target[len] == '\0' || target[len] == '/');
+    };
+
+    return matchPath(real_target, allowed1) || matchPath(real_target, allowed2);
+#else
 #ifdef _WIN32
     if(path.find(":\\") != path.npos || path.find("..") != path.npos)
         return false;
@@ -14,97 +51,68 @@ bool isInScope(const std::string &path)
         return false;
 #endif // _WIN32
     return true;
+#endif
 }
 
-// TODO: Add preprocessor option to disable (open web service safety)
-std::string fileGet(const std::string &path, bool scope_limit)
+// Read the content of a file as string
+std::string fileGet(const std::string& path)
 {
-    std::string content;
-
-    if(scope_limit && !isInScope(path))
+    if (!isInScope(path))
         return "";
 
-    std::FILE *fp = std::fopen(path.c_str(), "rb");
-    if(fp)
-    {
-        std::fseek(fp, 0, SEEK_END);
-        long tot = std::ftell(fp);
-        /*
-        char *data = new char[tot + 1];
-        data[tot] = '\0';
-        std::rewind(fp);
-        std::fread(&data[0], 1, tot, fp);
-        std::fclose(fp);
-        content.assign(data, tot);
-        delete[] data;
-        */
-        content.resize(tot);
-        std::rewind(fp);
-        std::fread(&content[0], 1, tot, fp);
-        std::fclose(fp);
-    }
+    std::ifstream infile(path, std::ios::binary);
+    if (!infile)
+        return "";
 
-    /*
-    std::stringstream sstream;
-    std::ifstream infile;
-    infile.open(path, std::ios::binary);
-    if(infile)
-    {
-        sstream<<infile.rdbuf();
-        infile.close();
-        content = sstream.str();
-    }
-    */
-    return content;
+    std::ostringstream buffer;
+    buffer << infile.rdbuf();
+    return buffer.str();
 }
 
-bool fileExist(const std::string &path, bool scope_limit)
+// Check if a file exists and is a regular file
+bool fileExist(const std::string& path)
 {
-    //using c++17 standard, but may cause problem on clang
-    //return std::filesystem::exists(path);
-    if(scope_limit && !isInScope(path))
+    if (!isInScope(path))
         return false;
+
     struct stat st;
-    return stat(path.data(), &st) == 0 && S_ISREG(st.st_mode);
+    return stat(path.c_str(), &st) == 0 && S_ISREG(st.st_mode);
 }
 
-bool fileCopy(const std::string &source, const std::string &dest)
+// Copy contents from one file to another
+bool fileCopy(const std::string& source, const std::string& dest)
 {
-    std::ifstream infile;
-    std::ofstream outfile;
-    infile.open(source, std::ios::binary);
-    if(!infile)
+    if (!isInScope(source) || !isInScope(dest))
         return false;
-    outfile.open(dest, std::ios::binary);
-    if(!outfile)
+
+    std::ifstream infile(source, std::ios::binary);
+    if (!infile)
         return false;
-    try
-    {
-        outfile<<infile.rdbuf();
+
+    std::ofstream outfile(dest, std::ios::binary);
+    if (!outfile)
+        return false;
+
+    try {
+        outfile << infile.rdbuf();
+    } catch (...) {
+        return false;
     }
-    catch (std::exception &e)
-    {
-        return false;
-    }
-    infile.close();
-    outfile.close();
+
     return true;
 }
 
-int fileWrite(const std::string &path, const std::string &content, bool overwrite)
+// Write content to a file (overwrite or append mode)
+int fileWrite(const std::string& path, const std::string& content, bool overwrite)
 {
-    /*
-    std::fstream outfile;
-    std::ios_base::openmode mode = overwrite ? std::ios_base::out : std::ios_base::app;
-    mode |= std::ios_base::binary;
-    outfile.open(path, mode);
-    outfile << content;
-    outfile.close();
-    return 0;
-    */
-    const char *mode = overwrite ? "wb" : "ab";
-    std::FILE *fp = std::fopen(path.c_str(), mode);
-    std::fwrite(content.c_str(), 1, content.size(), fp);
-    std::fclose(fp);
-    return 0;
+    if (!isInScope(path))
+        return -1;
+
+    std::ios_base::openmode mode = std::ios::binary | (overwrite ? std::ios::trunc : std::ios::app);
+    std::ofstream outfile(path, mode);
+    if (!outfile)
+        return -1;
+
+    outfile.write(content.c_str(), content.size());
+    return outfile.good() ? 0 : -2;
 }
