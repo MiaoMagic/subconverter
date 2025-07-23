@@ -11,6 +11,8 @@
 #include "utils/stl_extra.h"
 #include "utils/urlencode.h"
 #include "webserver.h"
+#define LOG_IF_LEVEL(level, msg) \
+    do { if (LOG_LEVEL >= level) writeLog(0, msg, level); } while(0)
 
 static const char *request_header_blacklist[] = {"host", "accept", "accept-encoding"};
 
@@ -31,6 +33,109 @@ void WebServer::stop_web_server()
     SERVER_EXIT_FLAG = true;
 }
 
+static bool isValidIP(std::string_view ip)
+{
+    sockaddr_in sa4{};
+    sockaddr_in6 sa6{};
+    std::string tmp(ip);
+    return inet_pton(AF_INET, tmp.c_str(), &sa4.sin_addr) == 1 || inet_pton(AF_INET6, tmp.c_str(), &sa6.sin6_addr) == 1;
+}
+
+static std::optional<std::string> extractFirstIP(std::string_view hdr)
+{
+    size_t pos = 0;
+    while (pos < hdr.size())
+    {
+        size_t comma = hdr.find(',', pos);
+        auto token = hdr.substr(pos, (comma == std::string_view::npos ? hdr.size() : comma) - pos);
+        size_t b = token.find_first_not_of(" \t\r\n\"");
+        size_t e = token.find_last_not_of(" \t\r\n\"");
+        if (b != std::string_view::npos && e != std::string_view::npos)
+        {
+            auto ip = token.substr(b, e - b + 1);
+
+            if (ip.front() == '[' && ip.back() == ']')
+            {
+                ip.remove_prefix(1);
+                ip.remove_suffix(1);
+            }
+
+            if (isValidIP(ip))
+            {
+                return std::string(ip);
+            }
+        }
+        if (comma == std::string_view::npos)
+            break;
+        pos = comma + 1;
+    }
+    return std::nullopt;
+}
+
+static std::string getClientRealIP(const httplib::Request &req)
+{
+    static constexpr std::array<std::array<std::string_view, 3>, 3> header_groups{{
+        {"CF-Connecting-IP", "True-Client-IP", "Fastly-Client-IP"},
+        {"X-Cluster-Client-IP", "X-Real-IP", "X-Forwarded-For"},
+        {"X-Client-IP", "X-Originating-IP", "Forwarded"}
+    }};
+
+    for (const auto &group : header_groups)
+    {
+        for (auto hv : group)
+        {
+            if (!req.has_header(hv))
+                continue;
+            auto val = req.get_header_value(hv);
+
+            if (hv == "Forwarded")
+            {
+                std::string_view remaining = val;
+
+                while (!remaining.empty())
+                {
+                    auto for_pos = remaining.find("for=");
+                    if (for_pos == std::string_view::npos)
+                        break;
+
+                    remaining.remove_prefix(for_pos + 4);
+
+                    bool quoted = false;
+                    if (!remaining.empty() && remaining.front() == '"')
+                    {
+                        quoted = true;
+                        remaining.remove_prefix(1);
+                    }
+                    auto end = remaining.find_first_of(quoted ? "\"" : ";,");
+                    auto ip_part = remaining.substr(0, end);
+
+                    if (ip_part.size() >= 2 && ip_part.front() == '[' && ip_part.back() == ']')
+                    {
+                        ip_part.remove_prefix(1);
+                        ip_part.remove_suffix(1);
+                    }
+
+                    if (isValidIP(ip_part))
+                    {
+                        return std::string(ip_part);
+                    }
+
+                    if (end == std::string_view::npos)
+                        break;
+                    remaining.remove_prefix(end + (quoted ? 1 : 0));
+                }
+            }
+
+            if (auto ip = extractFirstIP(val); ip.has_value())
+            {
+                return *ip;
+            }
+        }
+    }
+
+    return req.remote_addr;
+}
+
 static httplib::Server::Handler makeHandler(const responseRoute &rr)
 {
     return [rr](const httplib::Request &request, httplib::Response &response)
@@ -39,24 +144,44 @@ static httplib::Server::Handler makeHandler(const responseRoute &rr)
         Response resp;
         req.method = request.method;
         req.url = request.path;
+        auto real_ip = getClientRealIP(request);
         for (auto &h: request.headers)
         {
-            if (startsWith(h.first, "LOCAL_")
-            || startsWith(h.first, "REMOTE_")
-            || is_request_header_blacklisted(h.first))
+            if (startsWith(h.first, "LOCAL_") || startsWith(h.first, "REMOTE_") || is_request_header_blacklisted(h.first))
             {
                 continue;
             }
             req.headers.emplace(h.first.data(), h.second.data());
         }
+
+        auto existing_xff = trim(request.get_header_value("X-Forwarded-For"));
+        auto &xff = req.headers["X-Forwarded-For"];
+        if (!existing_xff.empty())
+        {
+            if (existing_xff.find(real_ip) == std::string::npos)
+            {
+                xff = real_ip + ", " + existing_xff;
+            }
+            else
+            {
+                xff = existing_xff;
+            }
+        }
+        else
+        {
+            xff = real_ip;
+        }
+        req.headers["X-Real-IP"] = real_ip;
+        req.headers["MiaoKo-Connecting-IP"] = real_ip;
         req.argument = request.params;
+        const auto &ct = request.get_header_value("Content-Type");
         if (request.method == "POST" || request.method == "PUT" || request.method == "PATCH")
         {
             if (request.is_multipart_form_data() && !request.files.empty())
             {
                 req.postdata = request.files.begin()->second.content;
             }
-            else if (request.get_header_value("Content-Type") == "application/x-www-form-urlencoded")
+            else if (ct.find("application/x-www-form-urlencoded") != std::string::npos)
             {
                 req.postdata = urlDecode(request.body);
             }
@@ -138,13 +263,14 @@ int WebServer::start_web_server_multi(listener_args *args)
         else
         {
             res.status = 404;
-        }
-    });
+        } });
     server.set_pre_routing_handler([&](const httplib::Request &req, httplib::Response &res)
-    {
-        writeLog(0, "Accept connection from client " + req.remote_addr + ":" + std::to_string(req.remote_port), LOG_LEVEL_DEBUG);
-        writeLog(0, "handle_cmd:    " + req.method + " handle_uri:    " + req.target, LOG_LEVEL_VERBOSE);
-        writeLog(0, "handle_header: " + dump(req.headers), LOG_LEVEL_VERBOSE);
+                                   {
+        auto real_ip = getClientRealIP(req);
+
+        LOG_IF_LEVEL(LOG_LEVEL_DEBUG,"Accept connection from client (real IP: " + real_ip + ", remote: " + req.remote_addr + ":" + std::to_string(req.remote_port) + ")");
+        LOG_IF_LEVEL(LOG_LEVEL_VERBOSE,"handle_cmd:    " + req.method + " handle_uri:    " + req.target);
+        LOG_IF_LEVEL(LOG_LEVEL_VERBOSE,"handle_header: " + dump(req.headers));
 
         if (req.has_header("SubConverter-Request"))
         {
@@ -214,9 +340,8 @@ int WebServer::start_web_server_multi(listener_args *args)
         catch (...)
         {
             res.status = 500;
-        }
-    });
-    if (serve_file)
+        } });
+    if (serve_file && std::filesystem::is_directory(serve_file_root))
     {
         server.set_mount_point("/", serve_file_root);
     }
