@@ -172,7 +172,7 @@ static std::string getClientRealIP(const httplib::Request &req)
     return req.remote_addr;
 }
 
-static std::string trimWhitespace(const std::string& str) {
+static std::string trimIPWhitespace(const std::string& str) {
     size_t first = str.find_first_not_of(" \t\r\n");
     if (first == std::string::npos) return "";
     size_t last = str.find_last_not_of(" \t\r\n");
@@ -187,7 +187,7 @@ static std::string limitXFFIPs(const std::string& xff, const std::string& newIP,
     while (pos < xff.length()) {
         size_t comma = xff.find(',', pos);
         std::string ip = xff.substr(pos, comma == std::string::npos ? xff.length() - pos : comma - pos);
-        ip = trimWhitespace(ip);
+        ip = trimIPWhitespace(ip);
         
         if (!ip.empty()) {
             std::string lower_ip = ip;
