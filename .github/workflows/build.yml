@@ -1,7 +1,7 @@
 name: GitHub CI
 on: 
   push:
-    branches: [ master ]
+    branches: [ miaomagic-dev ]
     tags:
       - '**'
   workflow_dispatch:
