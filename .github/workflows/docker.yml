@@ -1,7 +1,7 @@
 name: Publish Docker Image
 on: 
   push:
-    branches: [ master ]
+    branches: [ miaomagic-dev ]
     tags:
       - '**'
 
@@ -10,7 +10,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  REGISTRY_IMAGE: tindy2013/subconverter
+  REGISTRY_IMAGE: miaomagic681/subconverter
 
 jobs:
   build:
